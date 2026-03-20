@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 10% 20%, #172554 0%, transparent 35%),
+    radial-gradient(circle at 90% 10%, #155e75 0%, transparent 30%),
+    #020617;
+}
+
+#root {
+  min-height: 100vh;
+}

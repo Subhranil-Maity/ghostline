@@ -1,8 +1,6 @@
-use std::sync::Arc;
+use tokio::{io, net::TcpListener, sync::mpsc};
 
-use tokio::{io, net::TcpListener};
-
-use crate::net::Connection;
+use crate::net::{Connection, ConnectionEvent};
 
 pub struct Server {
     address: String,
@@ -15,7 +13,7 @@ impl Server {
 
     pub async fn start<F>(&self, on_connection: F) -> io::Result<()>
     where
-        F: Fn(Connection, String) + Send + Sync + 'static + Clone,
+        F: Fn(Connection, mpsc::Receiver<ConnectionEvent>, String) + Send + Sync + 'static + Clone,
     {
         let listener = TcpListener::bind(&self.address).await?;
 
@@ -24,9 +22,9 @@ impl Server {
 
             let (reader, writer) = socket.into_split();
 
-            let conn = Connection::new(reader, writer);
+            let (conn, event_rx) = Connection::new(reader, writer);
 
-            on_connection(conn, addr.to_string());
+            on_connection(conn, event_rx, addr.to_string());
         }
     }
     

@@ -1,8 +1,6 @@
-use std::sync::Arc;
+use tokio::{io, net::TcpStream, sync::mpsc};
 
-use tokio::{io, net::TcpStream};
-
-use crate::net::Connection;
+use crate::net::{Connection, ConnectionEvent};
 
 pub struct Client {
     address: String,
@@ -14,7 +12,7 @@ impl Client {
     }
 
     // pub async fn connect<F>(&self) -> io::Result<Connection>
-    pub async fn connect(&self) -> io::Result<Connection>
+    pub async fn connect(&self) -> io::Result<(Connection, mpsc::Receiver<ConnectionEvent>)>
     // where
     //     F: Fn(String) + Send + Sync + 'static,
     {

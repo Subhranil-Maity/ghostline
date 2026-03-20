@@ -2,10 +2,27 @@ mod net;
 mod state;
 use std::sync::Arc;
 
+use serde::Serialize;
 use state::AppState;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::mpsc;
 
-use crate::net::utils::send_simple_text_packet;
+use crate::net::{utils::send_simple_text_packet, Connection, ConnectionEvent};
+
+const MESSAGE_RECEIVED_EVENT: &str = "ghostline://message-received";
+const CONNECTION_CREATED_EVENT: &str = "ghostline://connection-created";
+
+#[derive(Clone, Serialize)]
+struct FrontendMessageEvent {
+    connection_id: String,
+    from: String,
+    message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct FrontendConnectionEvent {
+    connection_id: String,
+}
 // type TauriAppState = tauri::State<'_, Mutex<AppState>>;
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -23,10 +40,15 @@ fn get_server_address(state: State<'_, AppState>) -> String {
 }
 
 #[tauri::command(async)]
-async fn connect_to_host(state: State<'_, AppState>, addr: String) -> Result<bool, String> {
+async fn connect_to_host(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    addr: String,
+) -> Result<bool, String> {
     let conn = net::Client::new(addr.clone());
-    let connection = conn.connect().await.map_err(|e| e.to_string())?;
+    let (connection, event_rx) = conn.connect().await.map_err(|e| e.to_string())?;
     let connection = Arc::new(connection);
+    spawn_connection_event_handler(connection.clone(), event_rx, addr.clone(), app);
     println!("Connected To: {}", addr);
     {
         let mut connections = state.connections.lock().unwrap();
@@ -86,35 +108,90 @@ async fn send_simple_text(
         .await
         .map_err(|e| e.to_string())?;
 
-    conn.message_history
-        .lock()
+    conn.event_sender()
+        .send(ConnectionEvent::MessageReceived {
+            from: "You".to_string(),
+            message: msg,
+        })
         .await
-        .push(("You".to_string(), msg));
+        .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+fn spawn_connection_event_handler(
+    connection: Arc<Connection>,
+    mut event_rx: mpsc::Receiver<ConnectionEvent>,
+    connection_id: String,
+    app_handle: tauri::AppHandle,
+) {
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                ConnectionEvent::MessageReceived { from, message } => {
+                    connection
+                        .message_history
+                        .lock()
+                        .await
+                        .push((from.clone(), message.clone()));
+                    let _ = app_handle.emit(
+                        MESSAGE_RECEIVED_EVENT,
+                        FrontendMessageEvent {
+                            connection_id: connection_id.clone(),
+                            from,
+                            message,
+                        },
+                    );
+                }
+                ConnectionEvent::CapabilitiesUpdated { caps } => {
+                    println!("Connection capabilities updated: {:?}", caps);
+                }
+            }
+        }
+    });
 }
 // TODO: FAst use broadcasing form connection class it sself to manage state changes
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let state = AppState::new();
-    let server = Arc::new(net::Server::new("0.0.0.0:8000"));
-    {
-        let mut server_lock = state.server.write().unwrap();
-        *server_lock = Some(server.clone());
-    }
-    let conns = state.connections.clone();
-    tokio::spawn(async move {
-        server
-            .start(move |connection, addr| {
-                conns.lock().unwrap().insert(addr, Arc::new(connection));
-            })
-            .await
-            .unwrap();
-    });
     tauri::Builder::default()
         .manage(state)
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let server = Arc::new(net::Server::new("0.0.0.0:8000"));
+            let state: State<'_, AppState> = app.state();
+            {
+                let mut server_lock = state.server.write().unwrap();
+                *server_lock = Some(server.clone());
+            }
+            let conns = state.connections.clone();
+            let app_handle = app.handle().clone();
+
+            tokio::spawn(async move {
+                server
+                    .start(move |connection, event_rx, addr| {
+                        let connection = Arc::new(connection);
+                        let _ = app_handle.emit(
+                            CONNECTION_CREATED_EVENT,
+                            FrontendConnectionEvent {
+                                connection_id: addr.clone(),
+                            },
+                        );
+                        spawn_connection_event_handler(
+                            connection.clone(),
+                            event_rx,
+                            addr.clone(),
+                            app_handle.clone(),
+                        );
+                        conns.lock().unwrap().insert(addr, connection);
+                    })
+                    .await
+                    .unwrap();
+            });
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             get_server_address,

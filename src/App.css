@@ -2,15 +2,17 @@
 
 :root {
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: #cdd6f4;
+  background-color: #11111b;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 10% 20%, #172554 0%, transparent 35%),
-    radial-gradient(circle at 90% 10%, #155e75 0%, transparent 30%),
-    #020617;
+    radial-gradient(circle at top left, rgba(137, 180, 250, 0.12), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(250, 179, 135, 0.1), transparent 24%),
+    #11111b;
 }
 
 #root {

@@ -19,37 +19,47 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
-    sync::{oneshot, Mutex},
+    sync::{mpsc, oneshot, Mutex},
 };
 
 use crate::net::packet::{EventPacket, Packet, RequestPacket, ResponsePacket, decode};
 type PendingRequest = Arc<Mutex<HashMap<u64, oneshot::Sender<ResponsePacket>>>>;
 type MessageHistory = Arc<Mutex<Vec<(String, String)>>>;
+
+#[derive(Debug, Clone)]
+pub enum ConnectionEvent {
+    MessageReceived { from: String, message: String },
+    CapabilitiesUpdated { caps: Vec<String> },
+}
+
 pub struct Connection {
     writer: Arc<Mutex<OwnedWriteHalf>>,
     pending_requests: PendingRequest,
     next_request_id: AtomicU64,
     connection_capabilities: Arc<Mutex<Vec<String>>>,
-    pub message_history: MessageHistory
+    pub message_history: MessageHistory,
+    event_tx: mpsc::Sender<ConnectionEvent>,
 }
 const SIMPLE_TEXT_CHAT: &str = "SIMPLE_TEXT_CHAT";
 impl Connection {
-    pub fn new(mut reader: OwnedReadHalf, writer: OwnedWriteHalf) -> Self {
+    pub fn new(mut reader: OwnedReadHalf, writer: OwnedWriteHalf) -> (Self, mpsc::Receiver<ConnectionEvent>) {
         let writer = Arc::new(Mutex::new(writer));
         let pending_requests: PendingRequest = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, event_rx) = mpsc::channel(32);
 
         let pending_clone = pending_requests.clone();
         let write_cloen = writer.clone();
+        let event_tx_clone = event_tx.clone();
         let conn_cap = Arc::new(Mutex::new(vec![]));
         let conn_cap_clone = conn_cap.clone();
         let message_history: MessageHistory = Arc::new(Mutex::new(vec![]));
-        let message_history_clone = message_history.clone();
         let obj = Self {
             writer,
             pending_requests,
             next_request_id: AtomicU64::new(1),
             connection_capabilities: conn_cap,
-            message_history: message_history
+            message_history,
+            event_tx,
         };
 
         tokio::spawn(async move {
@@ -95,6 +105,11 @@ impl Connection {
                                         ResponsePacket::Capabilities { caps } => {
                                             let mut conn_cap = conn_cap_clone.lock().await;
                                             *conn_cap = caps.clone();
+                                            let _ = event_tx_clone
+                                                .send(ConnectionEvent::CapabilitiesUpdated {
+                                                    caps: caps.clone(),
+                                                })
+                                                .await;
                                         }
                                         _ => {}
                                     }
@@ -105,8 +120,13 @@ impl Connection {
                                     println!("event: {:?}", event);
                                     match event {
                                         EventPacket::ChatMessage(msg) => {
-                                            message_history_clone.lock().await.push(("Other".to_string(), msg.to_string()));   
-                                        },
+                                            let _ = event_tx_clone
+                                                .send(ConnectionEvent::MessageReceived {
+                                                    from: "Other".to_string(),
+                                                    message: msg,
+                                                })
+                                                .await;
+                                        }
                                     }
                                 }
 
@@ -118,12 +138,11 @@ impl Connection {
                                     println!("request: {:?}", payload);
 
                                     // Example: respond with OK
-                                    let response = Packet::Response {
+                                    let _response = Packet::Response {
                                         request_id,
                                         payload: ResponsePacket::Ok,
                                     };
 
-                                    let bytes = response.encode();
                                     todo!()
                                     // NOTE: writer is not available here; normally you'd route
                                     // requests to a handler that has access to the connection
@@ -135,7 +154,7 @@ impl Connection {
                 }
             }
         });
-        return obj;
+        (obj, event_rx)
     }
     pub async fn get_messages(&self, skip: u32, limit: u32) -> Vec<(String, String)> {
         let messages = self.message_history.lock().await;
@@ -155,6 +174,10 @@ impl Connection {
         // .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "serialize error"))?;
         let mut writer = self.writer.lock().await;
         writer.write_all(&bytes).await
+    }
+
+    pub fn event_sender(&self) -> mpsc::Sender<ConnectionEvent> {
+        self.event_tx.clone()
     }
 
     fn next_request_id(&self) -> u64 {

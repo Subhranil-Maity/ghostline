@@ -1,22 +1,16 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import ChatComposer from "./components/ChatComposer";
+import ChatHeader from "./components/ChatHeader";
+import MessageList from "./components/MessageList";
+import Sidebar from "./components/Sidebar";
+import {
+  ChatEntry,
+  ConnectionEventPayload,
+  MessageEventPayload,
+} from "./types/chat";
 import "./App.css";
-
-type ChatEntry = {
-  from: string;
-  message: string;
-};
-
-type MessageEventPayload = {
-  connection_id: string;
-  from: string;
-  message: string;
-};
-
-type ConnectionEventPayload = {
-  connection_id: string;
-};
 
 function App() {
   const [serverAddress, setServerAddress] = useState("Loading...");
@@ -25,8 +19,9 @@ function App() {
   const [selectedConnection, setSelectedConnection] = useState("");
   const [outboundMessage, setOutboundMessage] = useState("");
   const [messagesByConnection, setMessagesByConnection] = useState<Record<string, ChatEntry[]>>({});
-  const [refreshingConnection, setRefreshingConnection] = useState("");
   const [status, setStatus] = useState("Idle");
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
 
   const canSend = useMemo(
     () => selectedConnection.length > 0 && outboundMessage.trim().length > 0,
@@ -54,7 +49,6 @@ function App() {
 
   const refreshChat = async (connectionId: string) => {
     if (!connectionId) return;
-    setRefreshingConnection(connectionId);
     setStatus(`Refreshing ${connectionId}...`);
     try {
       const history = await invoke<[string, string][]>("get_connection_messages", {
@@ -69,8 +63,6 @@ function App() {
       setStatus(`Refreshed ${connectionId}`);
     } catch (error) {
       setStatus(`Refresh failed: ${String(error)}`);
-    } finally {
-      setRefreshingConnection("");
     }
   };
 
@@ -111,6 +103,7 @@ function App() {
 
   useEffect(() => {
     if (!selectedConnection) return;
+    shouldStickToBottomRef.current = true;
     void refreshChat(selectedConnection);
   }, [selectedConnection]);
 
@@ -157,132 +150,56 @@ function App() {
   const selectedConnectionLabel = selectedConnection || "No connection selected";
   const visibleMessages = selectedConnection ? messagesByConnection[selectedConnection] ?? [] : [];
 
+  useEffect(() => {
+    const container = messageScrollRef.current;
+    if (!container) return;
+    if (!shouldStickToBottomRef.current) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedConnection, visibleMessages.length]);
+
+  const handleMessageScroll = () => {
+    const container = messageScrollRef.current;
+    if (!container) return;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom < 48;
+  };
+
   return (
     <main className="h-screen overflow-hidden bg-[#11111b] text-[#cdd6f4] font-sans">
       <section className="mx-auto grid h-screen w-full max-w-7xl overflow-hidden md:grid-cols-[260px_1fr]">
+        <Sidebar
+          serverAddress={serverAddress}
+          connectAddress={connectAddress}
+          connections={connections}
+          selectedConnection={selectedConnection}
+          onConnectAddressChange={setConnectAddress}
+          onConnect={handleConnect}
+          onSelectConnection={setSelectedConnection}
+        />
 
-        {/* Sidebar */}
-        <aside className="flex min-h-0 flex-col border-b border-[#1e1e2e] bg-[#181825] md:border-b-0 md:border-r md:border-[#1e1e2e]">
-
-          {/* Branding */}
-          <div className="px-4 py-5 border-b border-[#1e1e2e]">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-[#6c7086]">Ghostline</p>
-            <h1 className="mt-1 text-[15px] font-medium text-[#f5e0dc]">Chats</h1>
-            <p className="mt-2 font-mono text-[11px] text-[#45475a]">{serverAddress}</p>
-          </div>
-
-          {/* Connect form */}
-          <form className="flex gap-2 px-4 py-3 border-b border-[#1e1e2e]" onSubmit={handleConnect}>
-            <input
-              id="connect-address"
-              value={connectAddress}
-              onChange={(e) => setConnectAddress(e.currentTarget.value)}
-              className="flex-1 min-w-0 bg-[#11111b] border border-[#313244] rounded px-2.5 py-1.5 font-mono text-xs text-[#cdd6f4] placeholder:text-[#45475a] outline-none focus:border-[#585b70]"
-              placeholder="host:port"
-            />
-            <button
-              type="submit"
-              className="bg-[#89b4fa] rounded px-3 py-1.5 text-xs font-medium text-[#11111b] hover:bg-[#b4befe] transition-colors"
-            >
-              Connect
-            </button>
-          </form>
-
-          {/* Connection list */}
-          <div className="flex-1 overflow-y-auto px-3 py-2">
-            {connections.length === 0 ? (
-              <p className="px-2 py-2 text-xs text-[#45475a]">No active connections.</p>
-            ) : (
-              connections.map((id) => (
-                <div
-                  key={id}
-                  onClick={() => setSelectedConnection(id)}
-                  className={`flex items-center gap-2 px-2.5 py-2 rounded-md cursor-pointer mb-0.5 transition-colors ${
-                    id === selectedConnection ? "bg-[#1e1e2e]" : "hover:bg-[#1e1e2e]/60"
-                  }`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    id === selectedConnection ? "bg-[#a6e3a1]" : "bg-[#585b70]"
-                  }`} />
-                  <span className="flex-1 font-mono text-xs text-[#bac2de] truncate">{id}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </aside>
-
-        {/* Main chat area */}
         <section className="flex min-h-0 flex-col overflow-hidden bg-[#11111b]">
-
-          {/* Header */}
-          <header className="flex items-center justify-between border-b border-[#1e1e2e] px-5 py-3.5 shrink-0">
-            <p className="font-mono text-[13px] text-[#f5e0dc]">{selectedConnectionLabel}</p>
-            <div className="flex items-center gap-3">
-              {selectedConnection && (
-                <button
-                  type="button"
-                  onClick={() => void refreshChat(selectedConnection)}
-                  disabled={refreshingConnection === selectedConnection}
-                  className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#585b70] transition-colors hover:text-[#89b4fa] disabled:text-[#313244]"
-                >
-                  {refreshingConnection === selectedConnection ? "sync" : "refresh"}
-                </button>
-              )}
-              <p className="text-[11px] text-[#45475a]">{status}</p>
-            </div>
-          </header>
-
-          {/* Messages */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-            <div className="mx-auto w-full max-w-3xl flex flex-col gap-5">
-              {visibleMessages.length === 0 ? (
-                <p className="text-xs text-[#45475a] leading-relaxed">
-                  No messages yet. Select a connection, refresh, or send a message.
-                </p>
-              ) : (
-                visibleMessages.map((entry, index) => {
-                  const isMe = entry.from === "You";
-                  return (
-                    <article key={`${entry.from}-${index}`} className="flex gap-3">
-                      <span className={`mt-0.5 w-0.5 shrink-0 rounded-sm self-stretch ${
-                        isMe ? "bg-[#89b4fa]" : "bg-[#fab387]"
-                      }`} />
-                      <div className="min-w-0">
-                        <p className={`mb-1 text-[10px] uppercase tracking-[0.16em] ${
-                          isMe ? "text-[#89b4fa]" : "text-[#fab387]"
-                        }`}>
-                          {entry.from}
-                        </p>
-                        <p className="text-[13px] leading-7 text-[#bac2de] whitespace-pre-wrap break-words">
-                          {entry.message}
-                        </p>
-                      </div>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Compose */}
-          <footer className="border-t border-[#1e1e2e] px-5 py-3 shrink-0">
-            <form className="mx-auto flex w-full max-w-3xl gap-2" onSubmit={handleSend}>
-              <input
-                value={outboundMessage}
-                onChange={(e) => setOutboundMessage(e.currentTarget.value)}
-                className="flex-1 bg-[#181825] border border-[#313244] rounded-md px-3 py-2.5 text-[13px] text-[#cdd6f4] placeholder:text-[#45475a] outline-none focus:border-[#585b70]"
-                placeholder="Write a message"
-              />
-              <button
-                type="submit"
-                disabled={!canSend}
-                className="bg-[#a6e3a1] rounded-md px-4 py-2.5 text-[13px] font-medium text-[#11111b] hover:bg-[#94e2d5] disabled:bg-[#313244] disabled:text-[#45475a] transition-colors"
-              >
-                Send
-              </button>
-            </form>
-          </footer>
-
+          <ChatHeader
+            selectedConnectionLabel={selectedConnectionLabel}
+            status={status}
+          />
+          <MessageList
+            messages={visibleMessages}
+            scrollRef={messageScrollRef}
+            onScroll={handleMessageScroll}
+          />
+          <ChatComposer
+            outboundMessage={outboundMessage}
+            canSend={canSend}
+            onMessageChange={setOutboundMessage}
+            onSend={handleSend}
+          />
         </section>
       </section>
     </main>

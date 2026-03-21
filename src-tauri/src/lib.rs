@@ -1,5 +1,6 @@
 mod net;
 mod state;
+mod peer;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -7,7 +8,11 @@ use state::AppState;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 
-use crate::net::{utils::send_simple_text_packet, Connection, ConnectionEvent};
+use crate::net::{
+    packet::handshake::PeerIdentity,
+    utils::send_simple_text_packet,
+    Connection, ConnectionEvent,
+};
 
 const MESSAGE_RECEIVED_EVENT: &str = "ghostline://message-received";
 const CONNECTION_CREATED_EVENT: &str = "ghostline://connection-created";
@@ -45,15 +50,16 @@ async fn connect_to_host(
     state: State<'_, AppState>,
     addr: String,
 ) -> Result<bool, String> {
-    let conn = net::Client::new(addr.clone());
+    let conn = net::Client::new(addr.clone(), state.local_peer.as_ref().clone());
     let (connection, event_rx) = conn.connect().await.map_err(|e| e.to_string())?;
     let connection = Arc::new(connection);
-    spawn_connection_event_handler(connection.clone(), event_rx, addr.clone(), app);
-    println!("Connected To: {}", addr);
-    {
-        let mut connections = state.connections.lock().unwrap();
-        connections.insert(addr, connection);
-    }
+    spawn_connection_event_handler(
+        connection,
+        event_rx,
+        addr,
+        state.connections.clone(),
+        app,
+    );
     Ok(true)
 }
 
@@ -122,12 +128,27 @@ async fn send_simple_text(
 fn spawn_connection_event_handler(
     connection: Arc<Connection>,
     mut event_rx: mpsc::Receiver<ConnectionEvent>,
-    connection_id: String,
+    pending_addr: String,
+    connections: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Connection>>>>,
     app_handle: tauri::AppHandle,
 ) {
     tokio::spawn(async move {
+        let mut connection_id = pending_addr;
         while let Some(event) = event_rx.recv().await {
             match event {
+                ConnectionEvent::PeerIdentified { peer } => {
+                    connection_id = register_connection(
+                        &connections,
+                        connection.clone(),
+                        &peer,
+                    );
+                    let _ = app_handle.emit(
+                        CONNECTION_CREATED_EVENT,
+                        FrontendConnectionEvent {
+                            connection_id: connection_id.clone(),
+                        },
+                    );
+                }
                 ConnectionEvent::MessageReceived { from, message } => {
                     connection
                         .message_history
@@ -150,7 +171,16 @@ fn spawn_connection_event_handler(
         }
     });
 }
-// TODO: FAst use broadcasing form connection class it sself to manage state changes
+
+fn register_connection(
+    connections: &Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Connection>>>>,
+    connection: Arc<Connection>,
+    peer: &PeerIdentity,
+) -> String {
+    let mut guard = connections.lock().unwrap();
+    guard.insert(peer.peer_id.clone(), connection);
+    peer.peer_id.clone()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
@@ -159,8 +189,11 @@ pub async fn run() {
         .manage(state)
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let server = Arc::new(net::Server::new("0.0.0.0:8000"));
             let state: State<'_, AppState> = app.state();
+            let server = Arc::new(net::Server::new(
+                "0.0.0.0:8000",
+                state.local_peer.as_ref().clone(),
+            ));
             {
                 let mut server_lock = state.server.write().unwrap();
                 *server_lock = Some(server.clone());
@@ -172,19 +205,13 @@ pub async fn run() {
                 server
                     .start(move |connection, event_rx, addr| {
                         let connection = Arc::new(connection);
-                        let _ = app_handle.emit(
-                            CONNECTION_CREATED_EVENT,
-                            FrontendConnectionEvent {
-                                connection_id: addr.clone(),
-                            },
-                        );
                         spawn_connection_event_handler(
                             connection.clone(),
                             event_rx,
                             addr.clone(),
+                            conns.clone(),
                             app_handle.clone(),
                         );
-                        conns.lock().unwrap().insert(addr, connection);
                     })
                     .await
                     .unwrap();

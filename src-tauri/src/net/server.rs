@@ -1,14 +1,18 @@
 use tokio::{io, net::TcpListener, sync::mpsc};
 
-use crate::net::{Connection, ConnectionEvent};
+use crate::net::{packet::handshake::PeerIdentity, Connection, ConnectionEvent};
 
 pub struct Server {
     address: String,
+    local_peer: PeerIdentity,
 }
 
 impl Server {
-    pub fn new(addr: impl Into<String>) -> Self {
-        Self { address: addr.into() }
+    pub fn new(addr: impl Into<String>, local_peer: PeerIdentity) -> Self {
+        Self {
+            address: addr.into(),
+            local_peer,
+        }
     }
 
     pub async fn start<F>(&self, on_connection: F) -> io::Result<()>
@@ -22,7 +26,7 @@ impl Server {
 
             let (reader, writer) = socket.into_split();
 
-            let (conn, event_rx) = Connection::new(reader, writer);
+            let (conn, event_rx) = Connection::new(reader, writer, self.local_peer.clone());
 
             on_connection(conn, event_rx, addr.to_string());
         }

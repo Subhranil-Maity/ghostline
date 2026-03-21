@@ -9,6 +9,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow: hidden;
   background:
     radial-gradient(circle at top left, rgba(137, 180, 250, 0.12), transparent 28%),
     radial-gradient(circle at bottom right, rgba(250, 179, 135, 0.1), transparent 24%),
@@ -17,4 +18,32 @@ body {
 
 #root {
   min-height: 100vh;
+}
+
+.themed-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #585b70 #181825;
+}
+
+.themed-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-track {
+  background: #181825;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #585b70 0%, #45475a 100%);
+  border: 2px solid #181825;
+  border-radius: 999px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #6c7086 0%, #585b70 100%);
+}
+
+.themed-scrollbar::-webkit-scrollbar-corner {
+  background: #181825;
 }

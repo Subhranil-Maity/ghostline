@@ -1,8 +1,7 @@
 use std::io;
 
 use crate::net::{
-    packet::{EventPacket, Packet},
-    Connection, SIMPLE_TEXT_CHAT,
+    Connection, SIMPLE_TEXT_CHAT, packet::{Packet, event::EventPacket},
 };
 pub async fn send_simple_text_packet(conn: &Connection, msg: String) -> io::Result<()> {
     let caps = conn.connection_capabilities.lock().await;

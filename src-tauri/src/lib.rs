@@ -1,17 +1,21 @@
+mod crypto;
 mod net;
-mod state;
 mod peer;
-use std::sync::Arc;
+mod state;
+use std::{path::PathBuf, sync::Arc};
 
 use serde::Serialize;
 use state::AppState;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 
-use crate::net::{
-    packet::handshake::PeerIdentity,
-    utils::send_simple_text_packet,
-    Connection, ConnectionEvent,
+use crate::{
+    crypto::{peer_id_from_bytes, LocalIdentity},
+    net::{
+        packet::handshake::PeerIdentity, utils::send_simple_text_packet, Connection,
+        ConnectionEvent,
+    },
+    peer::Peer,
 };
 
 const MESSAGE_RECEIVED_EVENT: &str = "ghostline://message-received";
@@ -53,13 +57,7 @@ async fn connect_to_host(
     let conn = net::Client::new(addr.clone(), state.local_peer.as_ref().clone());
     let (connection, event_rx) = conn.connect().await.map_err(|e| e.to_string())?;
     let connection = Arc::new(connection);
-    spawn_connection_event_handler(
-        connection,
-        event_rx,
-        addr,
-        state.connections.clone(),
-        app,
-    );
+    spawn_connection_event_handler(connection, event_rx, addr, state.peers.clone(), app);
     Ok(true)
 }
 
@@ -73,14 +71,14 @@ async fn get_connection_messages(
     let mut chats: Vec<(String, String)> = vec![];
 
     {
-        let connection = {
-            let c = state.connections.lock().unwrap();
-            c.get(&id).cloned()
+        let peer = {
+            let p = state.peers.lock().unwrap();
+            p.get(&id).cloned()
         };
 
-        if let Some(conn) = connection {
-            let c = conn.get_messages(skip, limit).await;
-            chats.extend(c);
+        if let Some(c) = peer {
+            let p = c.get_messages(skip, limit).await;
+            chats.extend(p);
         }
     }
 
@@ -88,9 +86,9 @@ async fn get_connection_messages(
 }
 #[tauri::command(async)]
 async fn get_my_connections(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let conns = state.connections.lock().unwrap();
-    let addresses = conns.keys().cloned().collect();
-    Ok(addresses)
+    let conns = state.peers.lock().unwrap();
+    let ids = conns.keys().cloned().collect();
+    Ok(ids)
 }
 
 #[tauri::command(async)]
@@ -99,8 +97,8 @@ async fn send_simple_text(
     conn_id: String,
     msg: String,
 ) -> Result<(), String> {
-    let conn = {
-        let c = state.connections.lock().unwrap();
+    let peer = {
+        let c = state.peers.lock().unwrap();
         c.get(&conn_id)
             .cloned()
             .ok_or_else(|| "Connection not found".to_string())?
@@ -110,11 +108,12 @@ async fn send_simple_text(
 
     // send_simple_text_packet.(msg).await.map_err(|e| e.to_string())?;
     //TODO: NEED TO SIMPLIFY &*
-    send_simple_text_packet(&*conn, msg.clone())
+    send_simple_text_packet(&peer.connection, msg.clone())
         .await
         .map_err(|e| e.to_string())?;
 
-    conn.event_sender()
+    peer.connection
+        .event_sender()
         .send(ConnectionEvent::MessageReceived {
             from: "You".to_string(),
             message: msg,
@@ -129,36 +128,40 @@ fn spawn_connection_event_handler(
     connection: Arc<Connection>,
     mut event_rx: mpsc::Receiver<ConnectionEvent>,
     pending_addr: String,
-    connections: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Connection>>>>,
+    peers: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Peer>>>>,
     app_handle: tauri::AppHandle,
 ) {
     tokio::spawn(async move {
-        let mut connection_id = pending_addr;
+        let mut peer_id = pending_addr;
         while let Some(event) = event_rx.recv().await {
             match event {
                 ConnectionEvent::PeerIdentified { peer } => {
-                    connection_id = register_connection(
-                        &connections,
-                        connection.clone(),
-                        &peer,
-                    );
+                    peer_id = register_connection(&peers, connection.clone(), &peer);
                     let _ = app_handle.emit(
                         CONNECTION_CREATED_EVENT,
                         FrontendConnectionEvent {
-                            connection_id: connection_id.clone(),
+                            connection_id: peer_id.clone(),
                         },
                     );
                 }
                 ConnectionEvent::MessageReceived { from, message } => {
-                    connection
-                        .message_history
-                        .lock()
-                        .await
-                        .push((from.clone(), message.clone()));
+                    let peer = {
+                        let p = peers.lock().unwrap();
+                        p.get(&peer_id).cloned()
+                    };
+                    // drop(gaurd);
+                    if let Some(peer) = peer {
+                        peer
+                            .messages
+                            .lock()
+                            .await
+                            .push((from.clone(), message.clone()));
+                    }
+
                     let _ = app_handle.emit(
                         MESSAGE_RECEIVED_EVENT,
                         FrontendMessageEvent {
-                            connection_id: connection_id.clone(),
+                            connection_id: peer_id.clone(),
                             from,
                             message,
                         },
@@ -173,18 +176,33 @@ fn spawn_connection_event_handler(
 }
 
 fn register_connection(
-    connections: &Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Connection>>>>,
+    peers: &Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Peer>>>>,
     connection: Arc<Connection>,
-    peer: &PeerIdentity,
+    peer_identity: &PeerIdentity,
 ) -> String {
-    let mut guard = connections.lock().unwrap();
-    guard.insert(peer.peer_id.clone(), connection);
-    peer.peer_id.clone()
+    let peer = Peer::new(
+        peer_identity.clone(),
+        connection,
+        peer::PeerStatus::Connected,
+    );
+    let id = peer.peer_id.clone();
+    let mut guard = peers.lock().unwrap();
+    guard.insert(id.clone(), Arc::new(peer));
+    id
+}
+fn keypair_path() -> Option<PathBuf> {
+    let home = dirs::home_dir()?; // returns None early if not found
+    Some(home.join(".ghostline").join("identity.key"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
-    let state = AppState::new();
+    //TODO: HANDLE Gracefully
+    let local_identity =
+        LocalIdentity::load_or_generate(&keypair_path().expect("Could not get to config folder"))
+            .unwrap();
+
+    let state = AppState::new(local_identity);
     tauri::Builder::default()
         .manage(state)
         .plugin(tauri_plugin_opener::init())
@@ -198,7 +216,7 @@ pub async fn run() {
                 let mut server_lock = state.server.write().unwrap();
                 *server_lock = Some(server.clone());
             }
-            let conns = state.connections.clone();
+            let peers = state.peers.clone();
             let app_handle = app.handle().clone();
 
             tokio::spawn(async move {
@@ -209,7 +227,7 @@ pub async fn run() {
                             connection.clone(),
                             event_rx,
                             addr.clone(),
-                            conns.clone(),
+                            peers.clone(),
                             app_handle.clone(),
                         );
                     })

@@ -47,7 +47,7 @@ pub struct Connection {
     pending_requests: PendingRequest,
     next_request_id: AtomicU64,
     connection_capabilities: Arc<Mutex<Vec<String>>>,
-    pub message_history: MessageHistory,
+    // pub message_history: MessageHistory,
     event_tx: mpsc::Sender<ConnectionEvent>,
 }
 const SIMPLE_TEXT_CHAT: &str = "SIMPLE_TEXT_CHAT";
@@ -67,13 +67,13 @@ impl Connection {
         let event_tx_clone = event_tx.clone();
         let conn_cap = Arc::new(Mutex::new(vec![]));
         let conn_cap_clone = conn_cap.clone();
-        let message_history: MessageHistory = Arc::new(Mutex::new(vec![]));
+        // let message_history: MessageHistory = Arc::new(Mutex::new(vec![]));
         let obj = Self {
             writer,
             pending_requests,
             next_request_id: AtomicU64::new(1),
             connection_capabilities: conn_cap,
-            message_history,
+            // message_history,
             event_tx,
         };
 
@@ -117,29 +117,13 @@ impl Connection {
                             request_id,
                             payload,
                         } => {
-                            // if request_id != 0 {
                                 let mut pending = pending_clone.lock().await;
 
                                 if let Some(tx) = pending.remove(&request_id) {
                                     let _ = tx.send(payload);
-                                    return; // payload moved, so exit early
+                                    continue; // payload moved, so exit early
                                 }
-                            // }
 
-                            // TODO: handle special case of first message in future will be
-                            // Enhanaced
-                            // match &payload {
-                            //     ResponsePacket::Capabilities { caps } => {
-                            //         let mut conn_cap = conn_cap_clone.lock().await;
-                            //         *conn_cap = caps.clone();
-                            //         let _ = event_tx_clone
-                            //             .send(ConnectionEvent::CapabilitiesUpdated {
-                            //                 caps: caps.clone(),
-                            //             })
-                            //             .await;
-                            //     }
-                            //     _ => {}
-                            // }
                         }
 
                         Packet::Event(event) => {
@@ -177,15 +161,24 @@ impl Connection {
                             // handle incoming request
                             println!("request: {:?}", payload);
 
-                            // Example: respond with OK
-                            let _response = Packet::Response {
+                            let response = Packet::Response {
                                 request_id,
-                                payload: ResponsePacket::Ok,
+                                payload: ResponsePacket::Error {
+                                    message: "not implemented".to_string(),
+                                },
                             };
 
-                            todo!()
-                            // NOTE: writer is not available here; normally you'd route
-                            // requests to a handler that has access to the connection
+                            let response_bytes = response.encode();
+                            let response_len = (response_bytes.len() as u32).to_be_bytes();
+                            let mut writer = write_cloen.lock().await;
+                            if let Err(err) = writer.write_all(&response_len).await {
+                                eprintln!("failed to write response length: {err}");
+                                break;
+                            }
+                            if let Err(err) = writer.write_all(&response_bytes).await {
+                                eprintln!("failed to write response body: {err}");
+                                break;
+                            }
                         }
                     }
                 }
@@ -193,16 +186,16 @@ impl Connection {
         });
         (obj, event_rx)
     }
-    pub async fn get_messages(&self, skip: u32, limit: u32) -> Vec<(String, String)> {
-        let messages = self.message_history.lock().await;
-
-        messages
-            .iter()
-            .skip(skip as usize)
-            .take(limit as usize)
-            .cloned()
-            .collect()
-    }
+    // pub async fn get_messages(&self, skip: u32, limit: u32) -> Vec<(String, String)> {
+    //     let messages = self.message_history.lock().await;
+    //
+    //     messages
+    //         .iter()
+    //         .skip(skip as usize)
+    //         .take(limit as usize)
+    //         .cloned()
+    //         .collect()
+    // }
 
 
 

@@ -35,6 +35,11 @@ impl ByteWriter {
         self.buf.extend_from_slice(v);
     }
 
+    pub fn write_u8_array(&mut self, v: &[u8]) {
+        self.write_u32(v.len() as u32);
+        self.write_bytes(v);
+    }
+
     pub fn write_string(&mut self, s: &str) {
         self.write_u32(s.len() as u32);
         self.write_bytes(s.as_bytes());
@@ -85,6 +90,11 @@ impl<'a> ByteReader<'a> {
         Ok(u64::from_be_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
+    }
+
+    pub fn read_u8_array(&mut self) -> Result<Vec<u8>, PacketError> {
+        let len = self.read_u32()? as usize;
+        Ok(self.take(len, "u8 array")?.to_vec())
     }
 
     pub fn read_string(&mut self) -> Result<String, PacketError> {

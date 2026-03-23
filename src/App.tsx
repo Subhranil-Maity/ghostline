@@ -51,14 +51,14 @@ function App() {
     if (!connectionId) return;
     setStatus(`Refreshing ${connectionId}...`);
     try {
-      const history = await invoke<[string, string][]>("get_connection_messages", {
+      const history = await invoke<ChatEntry[]>("get_connection_messages", {
         id: connectionId,
         limit: 100,
         skip: 0,
       });
       setMessagesByConnection((current) => ({
         ...current,
-        [connectionId]: history.map(([from, message]) => ({ from, message })),
+        [connectionId]: history,
       }));
       setStatus(`Refreshed ${connectionId}`);
     } catch (error) {
@@ -73,10 +73,7 @@ function App() {
     setStatus(`Connecting to ${addr}...`);
     try {
       await invoke<boolean>("connect_to_host", { addr });
-      await refreshConnections();
-      setSelectedConnection(addr);
-      await refreshChat(addr);
-      setStatus(`Connected to ${addr}`);
+      setStatus(`Connected to ${addr}, waiting for peer handshake...`);
     } catch (error) {
       setStatus(`Connection failed: ${String(error)}`);
     }
@@ -115,14 +112,14 @@ function App() {
     void listen<MessageEventPayload>("ghostline://message-received", (event) => {
       if (!isMounted) return;
 
-      const { connection_id, from, message } = event.payload;
+      const { peer_id, message } = event.payload;
       setMessagesByConnection((current) => ({
         ...current,
-        [connection_id]: [...(current[connection_id] ?? []), { from, message }],
+        [peer_id]: [...(current[peer_id] ?? []), message],
       }));
 
-      if (selectedConnection === connection_id) {
-        setStatus(`Live update from ${connection_id}`);
+      if (selectedConnection === peer_id) {
+        setStatus(`Live update from ${peer_id}`);
       }
     }).then((dispose) => {
       unlistenMessage = dispose;
@@ -135,6 +132,7 @@ function App() {
       setConnections((current) =>
         current.includes(connection_id) ? current : [...current, connection_id],
       );
+      setSelectedConnection((current) => current || connection_id);
       setStatus(`New connection ${connection_id}`);
     }).then((dispose) => {
       unlistenConnection = dispose;

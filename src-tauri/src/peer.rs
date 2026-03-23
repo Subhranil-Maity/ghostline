@@ -7,11 +7,9 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    crypto::{peer_id_from_bytes, LocalIdentity},
-    net::{packet::handshake::PeerIdentity, Connection},
+    crypto::{LocalIdentity, peer_id_from_bytes}, models::ChatMessage, net::{Connection, packet::handshake::PeerIdentity}
 };
 
-type ChatMessage = (String, String);
 
 pub struct Peer {
     pub peer_id: String,        // derived from their public_key
@@ -39,7 +37,7 @@ impl Peer {
             status,
         }
     }
-    pub async fn get_messages(&self, skip: u32, limit: u32) -> Vec<(String, String)> {
+    pub async fn get_messages(&self, skip: u32, limit: u32) -> Vec<ChatMessage> {
         let messages = self.messages.lock().await;
 
         messages

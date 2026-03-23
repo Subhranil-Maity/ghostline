@@ -1,12 +1,15 @@
+export type MessageSender = "Me" | "Remote";
+
 export type ChatEntry = {
-  from: string;
-  message: string;
+  uuid: string;
+  content: string;
+  timestamp: number;
+  sender: MessageSender;
 };
 
 export type MessageEventPayload = {
-  connection_id: string;
-  from: string;
-  message: string;
+  peer_id: string;
+  message: ChatEntry;
 };
 
 export type ConnectionEventPayload = {

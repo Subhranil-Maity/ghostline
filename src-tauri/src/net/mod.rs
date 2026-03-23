@@ -1,9 +1,9 @@
+mod bytehandler;
 mod client;
 pub mod packet;
 mod pending_requests;
 mod server;
 pub mod utils;
-mod bytehandler;
 
 pub use client::Client;
 pub use server::Server;
@@ -23,13 +23,12 @@ use tokio::{
     sync::{mpsc, oneshot, Mutex},
 };
 
-use crate::net::packet::{
-    decode,
-    event::EventPacket,
-    handshake::PeerIdentity,
-    request::RequestPacket,
-    responce::ResponsePacket,
-    Packet,
+use crate::{
+    models::ChatMessage,
+    net::packet::{
+        decode, event::EventPacket, handshake::PeerIdentity, request::RequestPacket,
+        responce::ResponsePacket, Packet,
+    },
 };
 
 type PendingRequest = Arc<Mutex<HashMap<u64, oneshot::Sender<ResponsePacket>>>>;
@@ -38,7 +37,7 @@ type MessageHistory = Arc<Mutex<Vec<(String, String)>>>;
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     PeerIdentified { peer: PeerIdentity },
-    MessageReceived { from: String, message: String },
+    MessageReceived(ChatMessage),
     CapabilitiesUpdated { caps: Vec<String> },
 }
 
@@ -117,13 +116,12 @@ impl Connection {
                             request_id,
                             payload,
                         } => {
-                                let mut pending = pending_clone.lock().await;
+                            let mut pending = pending_clone.lock().await;
 
-                                if let Some(tx) = pending.remove(&request_id) {
-                                    let _ = tx.send(payload);
-                                    continue; // payload moved, so exit early
-                                }
-
+                            if let Some(tx) = pending.remove(&request_id) {
+                                let _ = tx.send(payload);
+                                continue; // payload moved, so exit early
+                            }
                         }
 
                         Packet::Event(event) => {
@@ -132,10 +130,12 @@ impl Connection {
                             match event {
                                 EventPacket::ChatMessage(msg) => {
                                     let _ = event_tx_clone
-                                        .send(ConnectionEvent::MessageReceived {
-                                            from: "Other".to_string(),
-                                            message: msg,
-                                        })
+                                        .send(ConnectionEvent::MessageReceived(
+                                            ChatMessage::from_packet(
+                                                msg,
+                                                crate::models::MessageSender::Remote,
+                                            ),
+                                        ))
                                         .await;
                                 }
                             }
@@ -196,8 +196,6 @@ impl Connection {
     //         .cloned()
     //         .collect()
     // }
-
-
 
     pub async fn send_packet(&self, packet: Packet) -> io::Result<()> {
         let bytes = packet.encode();

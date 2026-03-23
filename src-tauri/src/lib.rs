@@ -1,16 +1,19 @@
 mod crypto;
+mod models;
 mod net;
 mod peer;
 mod state;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
 
 use serde::Serialize;
 use state::AppState;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use crate::{
     crypto::{peer_id_from_bytes, LocalIdentity},
+    models::ChatMessage,
     net::{
         packet::handshake::PeerIdentity, utils::send_simple_text_packet, Connection,
         ConnectionEvent,
@@ -23,9 +26,8 @@ const CONNECTION_CREATED_EVENT: &str = "ghostline://connection-created";
 
 #[derive(Clone, Serialize)]
 struct FrontendMessageEvent {
-    connection_id: String,
-    from: String,
-    message: String,
+    peer_id: String,
+    message: ChatMessage,
 }
 
 #[derive(Clone, Serialize)]
@@ -67,8 +69,8 @@ async fn get_connection_messages(
     id: String,
     limit: u32,
     skip: u32,
-) -> Result<Vec<(String, String)>, String> {
-    let mut chats: Vec<(String, String)> = vec![];
+) -> Result<Vec<ChatMessage>, String> {
+    let mut chats: Vec<ChatMessage> = vec![];
 
     {
         let peer = {
@@ -91,6 +93,12 @@ async fn get_my_connections(state: State<'_, AppState>) -> Result<Vec<String>, S
     Ok(ids)
 }
 
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
 #[tauri::command(async)]
 async fn send_simple_text(
     state: State<'_, AppState>,
@@ -103,21 +111,19 @@ async fn send_simple_text(
             .cloned()
             .ok_or_else(|| "Connection not found".to_string())?
     };
+    let message = ChatMessage {
+        uuid: Uuid::new_v4().to_string(),
+        content: msg.clone(),
+        timestamp: now_millis(),
+        sender: models::MessageSender::Me,
+    };
 
-    // let conn = connections
-
-    // send_simple_text_packet.(msg).await.map_err(|e| e.to_string())?;
-    //TODO: NEED TO SIMPLIFY &*
-    send_simple_text_packet(&peer.connection, msg.clone())
+    send_simple_text_packet(&peer.connection, message.clone())
         .await
         .map_err(|e| e.to_string())?;
-
     peer.connection
         .event_sender()
-        .send(ConnectionEvent::MessageReceived {
-            from: "You".to_string(),
-            message: msg,
-        })
+        .send(ConnectionEvent::MessageReceived(message))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -144,25 +150,20 @@ fn spawn_connection_event_handler(
                         },
                     );
                 }
-                ConnectionEvent::MessageReceived { from, message } => {
+                ConnectionEvent::MessageReceived(message) => {
                     let peer = {
                         let p = peers.lock().unwrap();
                         p.get(&peer_id).cloned()
                     };
                     // drop(gaurd);
                     if let Some(peer) = peer {
-                        peer
-                            .messages
-                            .lock()
-                            .await
-                            .push((from.clone(), message.clone()));
+                        let _ = peer.messages.lock().await.push(message.clone());
                     }
 
                     let _ = app_handle.emit(
                         MESSAGE_RECEIVED_EVENT,
                         FrontendMessageEvent {
-                            connection_id: peer_id.clone(),
-                            from,
+                            peer_id: peer_id.clone(),
                             message,
                         },
                     );

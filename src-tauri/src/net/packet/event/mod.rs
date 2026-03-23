@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::net::bytehandler::{
-    error::PacketError,
-    ByteReader, ByteWriter, Decode, Encode,
-};
+use crate::net::{bytehandler::{
+    ByteReader, ByteWriter, Decode, Encode, error::PacketError
+}, packet::event::chat_message::ChatMessagePacket};
+pub mod chat_message;
 
 /// Event subtypes
 pub const EVENT_CHAT_MESSAGE: u8 = 1;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum EventPacket {
-    ChatMessage(String),
+    ChatMessage(ChatMessagePacket),
 }
 
 impl Encode for EventPacket {
@@ -18,7 +18,7 @@ impl Encode for EventPacket {
         match self {
             EventPacket::ChatMessage(msg) => {
                 w.write_u8(EVENT_CHAT_MESSAGE);
-                w.write_string(msg);
+                msg.encode(w);
             }
         }
     }
@@ -27,7 +27,7 @@ impl Encode for EventPacket {
 impl Decode for EventPacket {
     fn decode(r: &mut ByteReader) -> Result<Self, PacketError> {
         match r.read_u8()? {
-            EVENT_CHAT_MESSAGE => Ok(Self::ChatMessage(r.read_string()?)),
+            EVENT_CHAT_MESSAGE => Ok(Self::ChatMessage(ChatMessagePacket::decode(r)?)),
             other => Err(PacketError::UnknownEventType(other)),
         }
     }

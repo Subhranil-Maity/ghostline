@@ -8,6 +8,14 @@ type MessageListProps = {
   onScroll: () => void;
 };
 
+function formatTimestamp(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
 function MessageList({ messages, scrollRef, onScroll }: MessageListProps) {
   return (
     <div
@@ -21,10 +29,10 @@ function MessageList({ messages, scrollRef, onScroll }: MessageListProps) {
             No messages yet. Select a connection, refresh, or send a message.
           </p>
         ) : (
-          messages.map((entry, index) => {
-            const isMe = entry.from === "You";
+          messages.map((entry) => {
+            const isMe = entry.sender === "Me";
             return (
-              <article key={`${entry.from}-${index}`} className="flex gap-3">
+              <article key={entry.uuid} className="flex gap-3">
                 <span
                   className={`mt-0.5 w-0.5 shrink-0 self-stretch rounded-sm ${
                     isMe ? "bg-[#89b4fa]" : "bg-[#fab387]"
@@ -36,10 +44,13 @@ function MessageList({ messages, scrollRef, onScroll }: MessageListProps) {
                       isMe ? "text-[#89b4fa]" : "text-[#fab387]"
                     }`}
                   >
-                    {entry.from}
+                    {isMe ? "You" : "Remote"}
+                    <span className="ml-2 font-normal tracking-[0.08em] text-[#7f849c]">
+                      {formatTimestamp(entry.timestamp)}
+                    </span>
                   </p>
                   <p className="whitespace-pre-wrap break-words text-[13px] leading-7 text-[#bac2de]">
-                    {entry.message}
+                    {entry.content}
                   </p>
                 </div>
               </article>

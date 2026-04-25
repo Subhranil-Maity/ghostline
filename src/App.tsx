@@ -6,8 +6,8 @@ import ChatHeader from "./components/ChatHeader";
 import MessageList from "./components/MessageList";
 import Sidebar from "./components/Sidebar";
 import {
-  ChatEntry,
   ConnectionEventPayload,
+  HistoryEntry,
   MessageEventPayload,
 } from "./types/chat";
 import "./App.css";
@@ -18,7 +18,7 @@ function App() {
   const [connections, setConnections] = useState<string[]>([]);
   const [selectedConnection, setSelectedConnection] = useState("");
   const [outboundMessage, setOutboundMessage] = useState("");
-  const [messagesByConnection, setMessagesByConnection] = useState<Record<string, ChatEntry[]>>({});
+  const [messagesByConnection, setMessagesByConnection] = useState<Record<string, HistoryEntry[]>>({});
   const [status, setStatus] = useState("Idle");
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -51,7 +51,7 @@ function App() {
     if (!connectionId) return;
     setStatus(`Refreshing ${connectionId}...`);
     try {
-      const history = await invoke<ChatEntry[]>("get_connection_messages", {
+      const history = await invoke<HistoryEntry[]>("get_connection_messages", {
         id: connectionId,
         limit: 100,
         skip: 0,

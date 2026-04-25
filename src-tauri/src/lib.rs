@@ -12,11 +12,10 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::{
-    crypto::{peer_id_from_bytes, LocalIdentity},
-    models::ChatMessage,
+    crypto::{LocalIdentity, peer_id_from_bytes},
+    models::{ChatMessage, Message},
     net::{
-        packet::handshake::PeerIdentity, utils::send_simple_text_packet, Connection,
-        ConnectionEvent,
+        Connection, ConnectionEvent, packet::handshake::PeerIdentity, utils::send_simple_text_packet
     },
     peer::Peer,
 };
@@ -27,7 +26,7 @@ const CONNECTION_CREATED_EVENT: &str = "ghostline://connection-created";
 #[derive(Clone, Serialize)]
 struct FrontendMessageEvent {
     peer_id: String,
-    message: ChatMessage,
+    message: Message,
 }
 
 #[derive(Clone, Serialize)]
@@ -69,8 +68,8 @@ async fn get_connection_messages(
     id: String,
     limit: u32,
     skip: u32,
-) -> Result<Vec<ChatMessage>, String> {
-    let mut chats: Vec<ChatMessage> = vec![];
+) -> Result<Vec<Message>, String> {
+    let mut chats: Vec<Message> = vec![];
 
     {
         let peer = {
@@ -111,6 +110,10 @@ async fn send_simple_text(
             .cloned()
             .ok_or_else(|| "Connection not found".to_string())?
     };
+    if peer.status().await == peer::PeerStatus::Disconnected {
+        return Err("Peer is disconnected".to_string());
+    }
+
     let message = ChatMessage {
         uuid: Uuid::new_v4().to_string(),
         content: msg.clone(),
@@ -118,10 +121,13 @@ async fn send_simple_text(
         sender: models::MessageSender::Me,
     };
 
-    send_simple_text_packet(&peer.connection, message.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    peer.connection
+    let connection = peer.connection().await;
+
+    if let Err(err) = send_simple_text_packet(&connection, message.clone()).await {
+        peer.set_status(peer::PeerStatus::Disconnected).await;
+        return Err(err.to_string());
+    }
+    connection
         .event_sender()
         .send(ConnectionEvent::MessageReceived(message))
         .await
@@ -142,7 +148,22 @@ fn spawn_connection_event_handler(
         while let Some(event) = event_rx.recv().await {
             match event {
                 ConnectionEvent::PeerIdentified { peer } => {
-                    peer_id = register_connection(&peers, connection.clone(), &peer);
+                    peer_id = register_connection(&peers, connection.clone(), &peer).await;
+                    let peer = {
+                        let p = peers.lock().unwrap();
+                        p.get(&peer_id).cloned()
+                    };
+                    if let Some(peer) = peer {
+                        let status_message = Message::PeerStatusUpdated(peer::PeerStatus::Connected);
+                        let _ = peer.messages.lock().await.push(status_message.clone());
+                        let _ = app_handle.emit(
+                            MESSAGE_RECEIVED_EVENT,
+                            FrontendMessageEvent {
+                                peer_id: peer_id.clone(),
+                                message: status_message,
+                            },
+                        );
+                    }
                     let _ = app_handle.emit(
                         CONNECTION_CREATED_EVENT,
                         FrontendConnectionEvent {
@@ -157,16 +178,36 @@ fn spawn_connection_event_handler(
                     };
                     // drop(gaurd);
                     if let Some(peer) = peer {
-                        let _ = peer.messages.lock().await.push(message.clone());
-                    }
+                        let timeline_message = Message::SimpleTextMessage(message.clone());
+                        let _ = peer.messages.lock().await.push(timeline_message.clone());
 
-                    let _ = app_handle.emit(
-                        MESSAGE_RECEIVED_EVENT,
-                        FrontendMessageEvent {
-                            peer_id: peer_id.clone(),
-                            message,
-                        },
-                    );
+                        let _ = app_handle.emit(
+                            MESSAGE_RECEIVED_EVENT,
+                            FrontendMessageEvent {
+                                peer_id: peer_id.clone(),
+                                message: timeline_message,
+                            },
+                        );
+                    }
+                }
+                ConnectionEvent::Disconnected => {
+                    let peer = {
+                        let p = peers.lock().unwrap();
+                        p.get(&peer_id).cloned()
+                    };
+                    if let Some(peer) = peer {
+                        peer.set_status(peer::PeerStatus::Disconnected).await;
+                        let status_message =
+                            Message::PeerStatusUpdated(peer::PeerStatus::Disconnected);
+                        let _ = peer.messages.lock().await.push(status_message.clone());
+                        let _ = app_handle.emit(
+                            MESSAGE_RECEIVED_EVENT,
+                            FrontendMessageEvent {
+                                peer_id: peer_id.clone(),
+                                message: status_message,
+                            },
+                        );
+                    }
                 }
                 ConnectionEvent::CapabilitiesUpdated { caps } => {
                     println!("Connection capabilities updated: {:?}", caps);
@@ -176,19 +217,30 @@ fn spawn_connection_event_handler(
     });
 }
 
-fn register_connection(
+async fn register_connection(
     peers: &Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<Peer>>>>,
     connection: Arc<Connection>,
     peer_identity: &PeerIdentity,
 ) -> String {
-    let peer = Peer::new(
+    let id = peer_id_from_bytes(&peer_identity.public_key_bytes).unwrap();
+
+    let existing_peer = {
+        let guard = peers.lock().unwrap();
+        guard.get(&id).cloned()
+    };
+
+    if let Some(peer) = existing_peer {
+        peer.replace_connection(peer_identity.clone(), connection).await;
+        return id;
+    }
+
+    let peer = Arc::new(Peer::new(
         peer_identity.clone(),
         connection,
         peer::PeerStatus::Connected,
-    );
-    let id = peer.peer_id.clone();
+    ));
     let mut guard = peers.lock().unwrap();
-    guard.insert(id.clone(), Arc::new(peer));
+    guard.insert(id.clone(), peer);
     id
 }
 fn keypair_path() -> Option<PathBuf> {

@@ -38,6 +38,7 @@ type MessageHistory = Arc<Mutex<Vec<(String, String)>>>;
 pub enum ConnectionEvent {
     PeerIdentified { peer: PeerIdentity },
     MessageReceived(ChatMessage),
+    Disconnected,
     CapabilitiesUpdated { caps: Vec<String> },
 }
 
@@ -183,6 +184,7 @@ impl Connection {
                     }
                 }
             }
+            let _ = event_tx_clone.send(ConnectionEvent::Disconnected).await;
         });
         (obj, event_rx)
     }

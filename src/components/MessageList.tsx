@@ -1,9 +1,9 @@
 import { RefObject } from "react";
 
-import { ChatEntry } from "../types/chat";
+import { HistoryEntry } from "../types/chat";
 
 type MessageListProps = {
-  messages: ChatEntry[];
+  messages: HistoryEntry[];
   scrollRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
 };
@@ -29,10 +29,22 @@ function MessageList({ messages, scrollRef, onScroll }: MessageListProps) {
             No messages yet. Select a connection, refresh, or send a message.
           </p>
         ) : (
-          messages.map((entry) => {
-            const isMe = entry.sender === "Me";
+          messages.map((entry, index) => {
+            if ("PeerStatusUpdated" in entry) {
+              return (
+                <article
+                  key={`status-${index}-${entry.PeerStatusUpdated}`}
+                  className="rounded border border-[#313244] bg-[#181825]/60 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[#7f849c]"
+                >
+                  Peer {entry.PeerStatusUpdated.toLowerCase()}
+                </article>
+              );
+            }
+
+            const message = entry.SimpleTextMessage;
+            const isMe = message.sender === "Me";
             return (
-              <article key={entry.uuid} className="flex gap-3">
+              <article key={message.uuid} className="flex gap-3">
                 <span
                   className={`mt-0.5 w-0.5 shrink-0 self-stretch rounded-sm ${
                     isMe ? "bg-[#89b4fa]" : "bg-[#fab387]"
@@ -46,11 +58,11 @@ function MessageList({ messages, scrollRef, onScroll }: MessageListProps) {
                   >
                     {isMe ? "You" : "Remote"}
                     <span className="ml-2 font-normal tracking-[0.08em] text-[#7f849c]">
-                      {formatTimestamp(entry.timestamp)}
+                      {formatTimestamp(message.timestamp)}
                     </span>
                   </p>
                   <p className="whitespace-pre-wrap break-words text-[13px] leading-7 text-[#bac2de]">
-                    {entry.content}
+                    {message.content}
                   </p>
                 </div>
               </article>
